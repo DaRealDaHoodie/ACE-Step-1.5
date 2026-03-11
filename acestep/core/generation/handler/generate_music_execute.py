@@ -58,6 +58,7 @@ class GenerateMusicExecuteMixin:
             try:
                 _result["outputs"] = self.service_generate(
                     captions=service_inputs["captions_batch"],
+                    global_captions=service_inputs.get("global_captions_batch"),
                     lyrics=service_inputs["lyrics_batch"],
                     metas=service_inputs["metas_batch"],
                     vocal_languages=service_inputs["vocal_languages_batch"],

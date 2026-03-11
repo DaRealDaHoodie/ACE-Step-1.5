@@ -4,6 +4,7 @@ This module provides the public ``generate_music`` entry point extracted from
 ``AceStepHandler`` so orchestration stays separate from lower-level helpers.
 """
 
+import gc
 import traceback
 from typing import Any, Dict, List, Optional, Union
 
@@ -94,7 +95,8 @@ class GenerateMusicMixin:
     def generate_music(
         self,
         captions: str,
-        lyrics: str,
+        global_caption: str = "",
+        lyrics: str = "",
         bpm: Optional[int] = None,
         key_scale: str = "",
         time_signature: str = "",
@@ -195,6 +197,7 @@ class GenerateMusicMixin:
                 processed_src_audio=processed_src_audio,
                 audio_duration=audio_duration,
                 captions=captions,
+                global_caption=global_caption,
                 lyrics=lyrics,
                 vocal_language=vocal_language,
                 instruction=instruction,
@@ -249,7 +252,7 @@ class GenerateMusicMixin:
                 use_tiled_decode=use_tiled_decode,
                 time_costs=time_costs,
             )
-            return self._build_generate_music_success_payload(
+            result = self._build_generate_music_success_payload(
                 outputs=outputs,
                 pred_wavs=pred_wavs,
                 pred_latents_cpu=pred_latents_cpu,
@@ -258,6 +261,20 @@ class GenerateMusicMixin:
                 actual_batch_size=actual_batch_size,
                 progress=progress,
             )
+            # Clear GPU tensor references from the mutable outputs dict so
+            # accelerator memory is reclaimable before the next generation.
+            _gpu_keys = (
+                "src_latents", "target_latents_input", "chunk_masks",
+                "latent_masks", "encoder_hidden_states",
+                "encoder_attention_mask", "context_latents",
+                "lyric_token_idss",
+            )
+            for _k in _gpu_keys:
+                outputs.pop(_k, None)
+            del outputs, pred_wavs, pred_latents_cpu
+            gc.collect()
+            self._empty_cache()
+            return result
         except Exception as exc:
             error_msg = f"Error: {exc!s}\n{traceback.format_exc()}"
             logger.exception("[generate_music] Generation failed")

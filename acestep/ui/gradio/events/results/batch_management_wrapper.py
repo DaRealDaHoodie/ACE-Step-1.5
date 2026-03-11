@@ -84,6 +84,13 @@ def generate_with_batch_management(
                 gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(),
             )
 
+    # Release the generator frame and run GC to reclaim any accelerator memory
+    # that was not yet freed at the end of the inner generator.
+    del generator
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     result = final_result_from_inner
     if result is None:
         error_msg = t("messages.batch_failed", error="No generation result was produced")

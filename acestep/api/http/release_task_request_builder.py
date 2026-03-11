@@ -38,6 +38,7 @@ def build_generate_music_request(
 
     payload = dict(
         prompt=parser.str("prompt"),
+        global_caption=parser.str("global_caption"),
         lyrics=parser.str("lyrics"),
         thinking=parser.bool("thinking"),
         analysis_only=parser.bool("analysis_only"),
