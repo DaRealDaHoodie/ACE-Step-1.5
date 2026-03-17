@@ -354,9 +354,11 @@ class InferencePipeline:
         from acestep.customized_vllm import reset_context
         try:
             is_cfg = slots[0].cfg_scale > 1.0 and slots[0].paired_slot is not None
-            logits = (self._execute_prefill(slots) if is_prefill
-                      else self._execute_autoregressive(slots))
-            reset_context()
+            try:
+                logits = (self._execute_prefill(slots) if is_prefill
+                          else self._execute_autoregressive(slots))
+            finally:
+                reset_context()
             temps, cfg_s, topk, topp, rep_pen = self._gather_sampling_config(slots, is_cfg)
 
             if is_cfg:
@@ -364,6 +366,7 @@ class InferencePipeline:
                 cond, uncond = logits[:nc], logits[nc:]
                 cond = self._penalize_repetitions(cond, slots[:nc], rep_pen)
                 cfg_logits = uncond + cfg_s.unsqueeze(1) * (cond - uncond)
+                cfg_logits = torch.nan_to_num(cfg_logits, nan=float('-inf'))
                 cfg_logits = self._constrain_logits(cfg_logits, slots[:nc])
                 tids = sample_tokens(cfg_logits, temps, topk, topp).tolist()
                 for i, s in enumerate(slots[:nc]):
