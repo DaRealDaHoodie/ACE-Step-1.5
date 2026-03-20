@@ -2,15 +2,25 @@
 Internationalization (i18n) module for Gradio UI
 Supports multiple languages with easy translation management
 """
+import contextvars
 import os
 import json
 from threading import Lock
 from typing import Dict, Optional
 
+from loguru import logger
+
+# Per-request language context.  When set, I18n.t() uses this value
+# instead of the shared current_language attribute, giving each
+# concurrent request its own language scope without cross-talk.
+_current_language_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "current_language", default=None
+)
+
 
 class I18n:
     """Internationalization handler"""
-    
+
     def __init__(self, default_language: str = "en"):
         """
         Initialize i18n handler
@@ -54,11 +64,7 @@ class I18n:
                     self.languages_info.append((lang_code, lang_name, lang_native_name))
     
     def set_language(self, language: str):
-        """Set current language.
-
-        Acquires the instance lock so concurrent ``t()`` calls always
-        read a consistent ``current_language`` value.
-        """
+        """Set the instance-level default language (shared fallback when no ContextVar is active)."""
         with self._lock:
             if language in self.translations:
                 self.current_language = language
@@ -66,20 +72,13 @@ class I18n:
                 print(f"Warning: Language '{language}' not found, using default")
     
     def t(self, key: str, **kwargs) -> str:
-        """
-        Translate a key to current language
-        
-        Args:
-            key: Translation key (dot-separated for nested keys)
-            **kwargs: Optional format parameters
-        
-        Returns:
-            Translated string
-        """
-        # Snapshot current_language under lock so a concurrent
-        # set_language() call cannot mutate it mid-lookup.
-        with self._lock:
-            lang = self.current_language
+        """Translate *key* using per-request ContextVar, then instance default, then English."""
+        # Prefer the per-request ContextVar; fall back to the shared
+        # instance attribute (snapshot under lock for thread safety).
+        lang = _current_language_var.get()
+        if lang is None:
+            with self._lock:
+                lang = self.current_language
 
         # Get translation from current language
         translation = self._get_nested_value(
@@ -171,23 +170,50 @@ def get_i18n(language: Optional[str] = None) -> I18n:
     return _i18n_instance
 
 
+def set_language_context(language: str) -> contextvars.Token[str | None]:
+    """Set the per-request language for the current execution context.
+
+    Call at a request boundary (Gradio event handler, FastAPI middleware)
+    to scope ``t()`` calls to *language* without mutating shared state.
+    If *language* is not in loaded translations, ``t()`` silently falls
+    back to English.  Requires the singleton to be initialised first
+    (via ``get_i18n()``) for validation; otherwise the check is skipped.
+
+    Returns a token for ``reset_language_context`` to restore the prior value.
+    """
+    # Set the ContextVar BEFORE logging so that any reentrant t() call
+    # triggered by the logger already sees the new language.
+    token = _current_language_var.set(language)
+    instance = _i18n_instance
+    if instance is not None and language not in instance.translations:
+        logger.warning("Language '{}' not in translations, t() will fall back to English",
+                       language)
+    return token
+
+
+def reset_language_context(token: contextvars.Token[str | None]) -> None:
+    """Restore the per-request language to its previous value."""
+    _current_language_var.reset(token)
+
+
 def t(key: str, **kwargs) -> str:
     """
     Convenience function for translation
-    
+
     Args:
         key: Translation key
         **kwargs: Optional format parameters
-    
+
     Returns:
         Translated string
     """
     return get_i18n().t(key, **kwargs)
 
+
 def available_languages_info() -> list[tuple[str, str, str]]:
     """
     Provides a list of tuples containing ISO codes and descriptive language names
-    
+
     Returns:
         List of tuples (iso code, english name, native name)
     """
