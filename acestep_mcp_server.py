@@ -73,22 +73,40 @@ async def _is_api_running() -> bool:
         return False
 
 
+def _find_uv() -> str:
+    """Locate the uv binary, checking common macOS/Linux install paths."""
+    import shutil
+    uv = shutil.which("uv")
+    if uv:
+        return uv
+    for candidate in [
+        os.path.expanduser("~/.local/bin/uv"),
+        "/opt/homebrew/bin/uv",
+        "/usr/local/bin/uv",
+    ]:
+        if os.path.isfile(candidate):
+            return candidate
+    raise RuntimeError("uv not found. Install it: https://docs.astral.sh/uv/")
+
+
 async def _boot_api_server() -> None:
     """Start acestep-api as a background subprocess and wait for it to be ready."""
     global _api_process
 
+    uv = _find_uv()
     env = {**os.environ, "PORT": str(PORT)}
+    log_path = Path(ACESTEP_DIR) / "acestep_mcp_boot.log"
 
-    # Use uv run so it picks up the project's venv automatically
-    cmd = ["uv", "run", "acestep-api"]
+    cmd = [uv, "run", "acestep-api"]
 
-    _api_process = subprocess.Popen(
-        cmd,
-        cwd=str(ACESTEP_DIR),
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    with open(log_path, "w") as log:
+        _api_process = subprocess.Popen(
+            cmd,
+            cwd=str(ACESTEP_DIR),
+            env=env,
+            stdout=log,
+            stderr=log,
+        )
 
     deadline = time.time() + START_TIMEOUT
     while time.time() < deadline:
