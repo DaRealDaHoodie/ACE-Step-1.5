@@ -163,25 +163,45 @@ async def _poll_task(client: httpx.AsyncClient, task_id: str) -> dict:
         )
         r.raise_for_status()
         result = r.json()["data"][0]
-        status = result["status"]
+        outer_status = result["status"]
 
-        if status == 2:  # done
-            return result
-        if status >= 3:  # error / timeout
+        # Check outer status codes
+        if outer_status >= 3:  # error / timeout
             raise RuntimeError(result.get("progress_text", "Generation failed"))
+
+        # The outer status often stays at 1 even after completion.
+        # Check the inner result items for stage="succeeded" as the real done signal.
+        if outer_status >= 1 and result.get("result"):
+            try:
+                items = json.loads(result["result"])
+                if items and all(item.get("stage") == "succeeded" for item in items):
+                    return result
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+        if outer_status == 2:  # fallback: explicit done status
+            return result
 
     raise RuntimeError(f"Task {task_id} timed out after {MAX_POLL_SECONDS}s")
 
 
 def _collect_outputs(result: dict, out_dir: Path, audio_format: str) -> list[str]:
     """Copy generated files to out_dir with human-readable names. Returns path list."""
+    from urllib.parse import urlparse, parse_qs, unquote
     items = json.loads(result["result"])
     task_id = result["task_id"]
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = []
     for i, item in enumerate(items):
-        src = Path(item["file"])
-        seed_used = item.get("env", {}).get("seed", "unknown")
+        # file field is a URL like /v1/audio?path=%2FUsers%2F...
+        # Extract and decode the actual filesystem path from the query string
+        parsed = urlparse(item["file"])
+        qs = parse_qs(parsed.query)
+        if "path" in qs:
+            src = Path(unquote(qs["path"][0]))
+        else:
+            src = Path(item["file"])  # fallback: treat as direct path
+        seed_used = item.get("seed_value", "unknown")
         dest = out_dir / f"{task_id}_{i}_seed{seed_used}.{audio_format}"
         shutil.copy2(src, dest)
         paths.append(str(dest))
